@@ -11,7 +11,8 @@ from colossalai.shardformer.modeling.chatglm2_6b.modeling_chatglm import (
 # import colossalai
 from colossalai.shardformer.policies.chatglm2 import ChatGLMModelPolicy
 
-from ..modeling.chatglm2 import ChatGLM2InferenceForwards, _init_to_get_rotary
+from ..modeling._utils import init_to_get_rotary
+from ..modeling.chatglm2 import ChatGLM2InferenceForwards
 
 try:
     HAS_TRITON_RMSNORM = True
@@ -52,7 +53,7 @@ class ChatGLM2InferPolicy(ChatGLMModelPolicy):
         return policy
 
     def postprocess(self):
-        _init_to_get_rotary(self.model)
+        init_to_get_rotary(self.model)
         return self.model
 
 

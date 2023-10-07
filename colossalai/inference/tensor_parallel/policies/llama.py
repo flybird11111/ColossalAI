@@ -8,6 +8,7 @@ from colossalai.shardformer.policies.base_policy import ModulePolicyDescription,
 # import colossalai
 from colossalai.shardformer.policies.llama import LlamaForCausalLMPolicy
 
+from ..modeling._utils import init_to_get_rotary
 from ..modeling.llama import LlamaInferenceForwards, get_llama_vllm_rmsnorm_forward
 
 try:
@@ -117,3 +118,7 @@ class LlamaModelInferPolicy(LlamaForCausalLMPolicy):
             )
 
         return policy
+
+    def postprocess(self):
+        init_to_get_rotary(self.model.model)
+        return self.model
