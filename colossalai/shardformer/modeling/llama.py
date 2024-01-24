@@ -3,7 +3,6 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-import torch.distributed as dist
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
@@ -15,13 +14,16 @@ from transformers.utils import logging
 
 from colossalai.pipeline.stage_manager import PipelineStageManager
 from colossalai.shardformer.shard import ShardConfig
+
 from ..layer import cross_entropy_1d
 
 try:
     from transformers.models.llama.modeling_llama import _prepare_4d_causal_attention_mask
+
     LATEST_VERSION = True
 except ImportError:
     LATEST_VERSION = False
+
 
 class LlamaPipelineForwards:
     """
@@ -203,7 +205,7 @@ class LlamaPipelineForwards:
         stage_manager: Optional[PipelineStageManager] = None,
         hidden_states: Optional[torch.FloatTensor] = None,
         stage_index: Optional[List[int]] = None,
-        shard_config: ShardConfig = None
+        shard_config: ShardConfig = None,
     ):
         r"""
         Args:
@@ -279,11 +281,12 @@ class LlamaPipelineForwards:
                 if shard_config.enable_tensor_parallelism:
                     new_vocab_size = logits.shape[-1]
                     shift_logits = shift_logits.view(-1, new_vocab_size)
-                    loss = cross_entropy_1d(shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group)
+                    loss = cross_entropy_1d(
+                        shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
+                    )
                 else:
                     shift_logits = shift_logits.view(-1, self.config.vocab_size)
                     loss = loss_fct(shift_logits, shift_labels)
-
 
             if not return_dict:
                 output = (logits,) + outputs[1:]
@@ -490,9 +493,92 @@ def get_llama_flash_attention_forward(shard_config: ShardConfig):
     return forward
 
 
+def get_llama_flash_attention_pytorch_forward(shard_config: ShardConfig):
+    from einops import rearrange
+    from transformers.models.llama.modeling_llama import LlamaAttention, apply_rotary_pos_emb
+
+    llama_version = 2
+    try:
+        from transformers.models.llama.modeling_llama import repeat_kv
+    except:
+        warnings.warn("using llamav1, llamav1 hasn't repeat_kv function")
+        llama_version = 1
+
+    print("get_llama_flash_attention_pytorch_forward")
+
+    def forward(
+        self: LlamaAttention,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        bsz, q_len, _ = hidden_states.size()
+        assert q_len % 4 == 0, "Flash Attention Error: The sequence length should be a multiple of 4."
+
+        query_states = self.q_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = self.k_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            kv_seq_len += past_key_value[0].shape[-2]
+
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+
+        if past_key_value is not None:
+            # reuse k, v, self_attention
+            key_states = torch.cat([past_key_value[0], key_states], dim=2)
+            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
+        past_key_value = (key_states, value_states) if use_cache else None
+
+        # repeat k/v heads if n_kv_heads < n_heads
+        if llama_version == 2:
+            key_states = repeat_kv(key_states, self.num_key_value_groups)
+            value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+        # me_input_shape = (bsz, q_len, self.num_heads, self.head_dim)
+        # query_states = query_states.transpose(1, 2).contiguous().view(*me_input_shape)
+        # key_states = key_states.transpose(1, 2).contiguous().view(*me_input_shape)
+        # value_states = value_states.transpose(1, 2).contiguous().view(*me_input_shape)
+
+        # flash_attention_mask = None
+        # attn_mask_type = AttnMaskType.causal
+        # if not getattr(shard_config, "causal_lm", False) and attention_mask != None:
+        #     if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+        #         raise ValueError(
+        #             f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+        #         )
+        #     flash_attention_mask = ~(attention_mask[:, :, -1].squeeze(1).to(torch.bool)).contiguous()
+        #     attn_mask_type = AttnMaskType.paddedcausal
+
+        # attention = ColoAttention(embed_dim=self.hidden_size, num_heads=self.num_heads)
+        # attn_output = attention(
+        #     query_states, key_states, value_states, attn_mask=flash_attention_mask, attn_mask_type=attn_mask_type
+        # )
+        with torch.backends.cuda.enable_flash_sdp(enabled=True):
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query=query_states, key=key_states, value=value_states, attn_mask=attention_mask
+            )
+
+        rearrange(out, "b h s d -> b s (h d)")
+        attn_output = attn_output.view()
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None, past_key_value
+
+    return forward
+
+
 def get_lm_forward_with_dist_cross_entropy(shard_config: ShardConfig):
     from transformers import LlamaForCausalLM
-        
+
     def forward(
         self: LlamaForCausalLM,
         input_ids: torch.LongTensor = None,
@@ -573,11 +659,12 @@ def get_lm_forward_with_dist_cross_entropy(shard_config: ShardConfig):
             if shard_config.enable_tensor_parallelism:
                 new_vocab_size = logits.shape[-1]
                 shift_logits = shift_logits.view(-1, new_vocab_size)
-                loss = cross_entropy_1d(shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group)
+                loss = cross_entropy_1d(
+                    shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
+                )
             else:
                 shift_logits = shift_logits.view(-1, self.config.vocab_size)
                 loss = loss_fct(shift_logits, shift_labels)
-
 
         if not return_dict:
             output = (logits,) + outputs[1:]
@@ -590,4 +677,5 @@ def get_lm_forward_with_dist_cross_entropy(shard_config: ShardConfig):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
     return forward

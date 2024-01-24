@@ -10,7 +10,7 @@ from colossalai.shardformer.layer import FusedRMSNorm, Linear1D_Col, Linear1D_Ro
 
 from ..modeling.llama import (
     LlamaPipelineForwards,
-    get_llama_flash_attention_forward,
+    get_llama_flash_attention_pytorch_forward,
     get_lm_forward_with_dist_cross_entropy,
 )
 from .base_policy import ModulePolicyDescription, Policy, SubModuleReplacementDescription
@@ -130,7 +130,7 @@ class LlamaPolicy(Policy):
         if self.shard_config.enable_flash_attention:
             self.append_or_create_method_replacement(
                 description={
-                    "forward": get_llama_flash_attention_forward(self.shard_config),
+                    "forward": get_llama_flash_attention_pytorch_forward(self.shard_config),
                 },
                 policy=policy,
                 target_key=LlamaAttention,

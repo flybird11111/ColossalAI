@@ -208,6 +208,7 @@ class T5BasePolicy(Policy):
                 policy=policy,
                 target_key=T5Attention,
             )
+            # pass
 
         # use jit operator
         if self.shard_config.enable_jit_fused:
