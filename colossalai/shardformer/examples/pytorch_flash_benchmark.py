@@ -12,28 +12,42 @@ from colossalai.kernel.cuda_native import AttnMaskType, ColoAttention
 
 
 def data_gen(batch_size, seq_length_s, seq_length_l, num_head, head_dim):
-    query = torch.rand(batch_size, num_head, seq_length_l, head_dim, dtype=torch.float16, device="cuda")
-    key = torch.rand(batch_size, num_head, seq_length_s, head_dim, dtype=torch.float16, device="cuda")
-    value = torch.rand(batch_size, num_head, seq_length_s, head_dim, dtype=torch.float16, device="cuda")
-    attn_mask = torch.rand(batch_size, 1, seq_length_l, seq_length_s, dtype=torch.float16, device="cuda")
+    query = torch.rand(
+        batch_size, num_head, seq_length_l, head_dim, dtype=torch.float16, device="cuda", requires_grad=True
+    )
+    key = torch.rand(
+        batch_size, num_head, seq_length_s, head_dim, dtype=torch.float16, device="cuda", requires_grad=True
+    )
+    value = torch.rand(
+        batch_size, num_head, seq_length_s, head_dim, dtype=torch.float16, device="cuda", requires_grad=True
+    )
+    attn_mask = torch.rand(
+        batch_size, 1, seq_length_l, seq_length_s, dtype=torch.float16, device="cuda", requires_grad=True
+    )
     return dict(query=query, key=key, value=value, attn_mask=attn_mask)
 
 
 def data_gen_for_causal(batch_size, seq_length_s, seq_length_l, num_head, head_dim):
-    query = torch.rand(batch_size, num_head, seq_length_l, head_dim, dtype=torch.float16, device="cuda")
-    key = torch.rand(batch_size, num_head, seq_length_s, head_dim, dtype=torch.float16, device="cuda")
-    value = torch.rand(batch_size, num_head, seq_length_s, head_dim, dtype=torch.float16, device="cuda")
+    query = torch.rand(
+        batch_size, num_head, seq_length_l, head_dim, dtype=torch.float16, device="cuda", requires_grad=True
+    )
+    key = torch.rand(
+        batch_size, num_head, seq_length_s, head_dim, dtype=torch.float16, device="cuda", requires_grad=True
+    )
+    value = torch.rand(
+        batch_size, num_head, seq_length_s, head_dim, dtype=torch.float16, device="cuda", requires_grad=True
+    )
     return dict(query=query, key=key, value=value)
 
 
 def pytorch_flash_run(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
-    # with torch.backends.cuda.enable_flash_sdp(True):
-    with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+    with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_math=True, enable_mem_efficient=False):
         attn_output = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=is_causal, scale=scale
         )
     attn_output = rearrange(attn_output, "b h s d -> b s (h d)")
-    return attn_output
+    dy = torch.rand_like(attn_output)
+    grad_q, grad_k, grad_v = torch.autograd.grad(attn_output, (query, key, value), dy)
 
 
 def coloattention_flash(attention, query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
@@ -51,10 +65,11 @@ def coloattention_flash(attention, query, key, value, attn_mask=None, dropout_p=
         attn_mask_type = AttnMaskType.causal
 
     attn_output = attention(query, key, value, attn_mask=flash_attention_mask, attn_mask_type=attn_mask_type)
-    return attn_output
+    dy = torch.rand_like(attn_output)
+    grad_q, grad_k, grad_v = torch.autograd.grad(attn_output, (query, key, value), dy)
 
 
-BATCH, N_HEADS, N_CTX, D_HEAD = 32, 16, 4096, 256
+BATCH, N_HEADS, N_CTX, D_HEAD = 4, 8, 4096, 64
 
 # vary seq length for fixed head and batch=4
 configs = [
@@ -77,7 +92,7 @@ def bench_shardformer(batch_size, num_head, head_dim, seq_length, provider, dtyp
     warmup = 10
     rep = 100
     # prepare data
-    data = data_gen_for_causal(batch_size, seq_length, seq_length, num_head, head_dim)
+    data = data_gen(batch_size, seq_length, seq_length, num_head, head_dim)
     if provider == "pytorch_flash":
         fn = lambda: pytorch_flash_run(**data, is_causal=False)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)

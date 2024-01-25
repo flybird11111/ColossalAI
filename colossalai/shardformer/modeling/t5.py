@@ -630,40 +630,6 @@ def get_t5_flash_attention_forward():
 
         key_length = real_seq_length if key_value_states is None else key_value_states.shape[1]
 
-        # def shape(states):
-        #     """projection"""
-        #     return states.view(batch_size, -1, self.n_heads, self.key_value_proj_dim)
-
-        # def unshape(states):
-        #     """reshape"""
-        #     return states.view(batch_size, -1, self.inner_dim)
-
-        # def project(hidden_states, proj_layer, key_value_states, past_key_value):
-        #     """projects hidden states correctly to key/query states"""
-        #     if key_value_states is None:
-        #         # self-attn
-        #         # (batch_size, n_heads, seq_length, dim_per_head)
-        #         hidden_states = shape(proj_layer(hidden_states))
-        #     elif past_key_value is None:
-        #         # cross-attn
-        #         # (batch_size, n_heads, seq_length, dim_per_head)
-        #         hidden_states = shape(proj_layer(key_value_states))
-
-        #     if past_key_value is not None:
-        #         if key_value_states is None:
-        #             # self-attn
-        #             # (batch_size, n_heads, key_length, dim_per_head)
-        #             hidden_states = torch.cat([past_key_value, hidden_states], dim=1)
-        #         elif past_key_value.shape[1] != key_value_states.shape[1]:
-        #             # checking that the `sequence_length` of the `past_key_value` is the same as
-        #             # the provided `key_value_states` to support prefix tuning
-        #             # cross-attn
-        #             # (batch_size, n_heads, seq_length, dim_per_head)
-        #             hidden_states = shape(proj_layer(key_value_states))
-        #         else:
-        #             # cross-attn
-        #             hidden_states = past_key_value
-        #     return hidden_states
         def shape(states):
             """projection"""
             return states.view(batch_size, -1, self.n_heads, self.key_value_proj_dim).transpose(1, 2)

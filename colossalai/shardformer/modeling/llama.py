@@ -504,8 +504,6 @@ def get_llama_flash_attention_pytorch_forward(shard_config: ShardConfig):
         warnings.warn("using llamav1, llamav1 hasn't repeat_kv function")
         llama_version = 1
 
-    print("get_llama_flash_attention_pytorch_forward")
-
     def forward(
         self: LlamaAttention,
         hidden_states: torch.Tensor,
@@ -567,8 +565,7 @@ def get_llama_flash_attention_pytorch_forward(shard_config: ShardConfig):
                 query=query_states, key=key_states, value=value_states, attn_mask=attention_mask
             )
 
-        rearrange(out, "b h s d -> b s (h d)")
-        attn_output = attn_output.view()
+        rearrange(attn_output, "b h s d -> b s (h d)")
         attn_output = self.o_proj(attn_output)
 
         return attn_output, None, past_key_value
