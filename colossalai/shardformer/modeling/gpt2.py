@@ -24,8 +24,6 @@ from colossalai.pipeline.stage_manager import PipelineStageManager
 from colossalai.shardformer.layer._operation import gather_forward_split_backward, split_forward_gather_backward
 from colossalai.shardformer.shard import ShardConfig
 
-from ..layer import cross_entropy_1d
-
 
 class GPT2PipelineForwards:
     """
@@ -56,7 +54,6 @@ class GPT2PipelineForwards:
     ) -> Union[Dict, Tuple, BaseModelOutputWithPastAndCrossAttentions]:
         # This function is modified on the basis of transformers.models.gpt2.modeling_gpt2.GPT2Model.forward.
         # Please refer to original code of transformers for more details.
-
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         logger = logging.get_logger(__name__)
@@ -330,12 +327,13 @@ class GPT2PipelineForwards:
             loss_fct = CrossEntropyLoss()
             shift_logits = shift_logits.view(-1, shift_logits.size(-1))
             shift_labels = shift_labels.view(-1)
-            if shard_config.enable_tensor_parallelism:
-                loss = cross_entropy_1d(
-                    shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
-                )
-            else:
-                loss = loss_fct(shift_logits, shift_labels)
+            # if shard_config.enable_tensor_parallelism:
+            #     loss = cross_entropy_1d(
+            #         shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
+            #     )
+            # else:
+            # loss = loss_fct(shift_logits, shift_labels)
+            loss = loss_fct(shift_logits, shift_labels)
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
@@ -726,6 +724,87 @@ class GPT2PipelineForwards:
         )
 
 
+from einops import rearrange
+
+try:
+    from flash_attn.flash_attn_interface import flash_attn_unpadded_func
+except ImportError:
+    try:
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func as flash_attn_unpadded_func
+    except ImportError:
+        flash_attn_unpadded_func = None
+
+
+class FlashSelfAttention(torch.nn.Module):
+    """Implement the scaled dot product attention with softmax.
+    Arguments
+    ---------
+        softmax_scale: The temperature to use for the softmax attention.
+                      (default: 1/sqrt(d_keys) where d_keys is computed at
+                      runtime)
+        attention_dropout: The dropout rate to apply to the attention
+                           (default: 0.0)
+    """
+
+    def __init__(self, causal=False, softmax_scale=None, attention_dropout=0.0, device=None, dtype=None):
+        super().__init__()
+        assert flash_attn_unpadded_func is not None, (
+            "Please install FlashAttention first, " "e.g., with pip install flash-attn"
+        )
+        assert rearrange is not None, "Please install einops first, e.g., with pip install einops"
+        self.causal = causal
+        self.softmax_scale = softmax_scale
+        self.dropout_p = attention_dropout
+
+    def forward(self, q, k, v):
+        """Implements the multihead softmax attention.
+        Arguments
+        ---------
+            q, k, v: The tensor containing the query, key, and value. (B, S, H, D)
+        """
+
+        assert all((i.dtype in [torch.float16, torch.bfloat16] for i in (q, k, v)))
+        assert all((i.is_cuda for i in (q, k, v)))
+
+        batch_size, seqlen_q = q.shape[0], q.shape[1]
+        seqlen_k = k.shape[1]
+
+        q, k, v = [rearrange(x, "b s ... -> (b s) ...") for x in [q, k, v]]
+        cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32, device=q.device)
+
+        if self.training:
+            # during training q,k,v always have same seqlen
+            assert seqlen_k == seqlen_q
+
+            is_causal = self.causal
+            cu_seqlens_k = cu_seqlens_q
+            dropout_p = self.dropout_p
+        else:
+            # turn off FA causal mask after first inference autoregressive iteration
+            # only on first autoregressive step q,k,v have same seqlen
+            is_causal = seqlen_q == seqlen_k
+            cu_seqlens_k = torch.arange(
+                0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32, device=q.device
+            )
+            dropout_p = 0
+
+        output = flash_attn_unpadded_func(
+            q,
+            k,
+            v,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            seqlen_q,
+            seqlen_k,
+            dropout_p,
+            softmax_scale=self.softmax_scale,
+            causal=is_causal,
+        )
+
+        output = rearrange(output, "(b s) ... -> b s ...", b=batch_size)
+        return output
+
+
 def get_gpt2_flash_attention_forward():
     from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 
@@ -759,13 +838,15 @@ def get_gpt2_flash_attention_forward():
 
             query = self.q_attn(hidden_states)
             key, value = self.c_attn(encoder_hidden_states).split(self.split_size, dim=2)
-            attention_mask = encoder_attention_mask
         else:
             query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
 
         query = split_heads(query, self.num_heads, self.head_dim)
         key = split_heads(key, self.num_heads, self.head_dim)
         value = split_heads(value, self.num_heads, self.head_dim)
+        # print("query.shape", query.shape)
+        # print("key.shape", key.shape)
+        # print("value.shape", value.shape)
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -777,27 +858,36 @@ def get_gpt2_flash_attention_forward():
         else:
             present = None
 
-        if not self.is_cross_attention:
-            attn_mask_type = AttnMaskType.causal
-            flash_attention_mask = None
-        if attention_mask != None:
-            flash_attention_mask = ~(attention_mask[:, :, -1].squeeze(1).to(torch.bool)).contiguous()
-            if not torch.all(flash_attention_mask):
-                if attn_mask_type == AttnMaskType.causal:
-                    attn_mask_type == AttnMaskType.paddedcausal
-                else:
-                    attn_mask_type = AttnMaskType.padding
+        # if not self.is_cross_attention:
+        #     attn_mask_type = AttnMaskType.causal
+        #     flash_attention_mask = None
+        # if attention_mask != None:
+        #     flash_attention_mask = ~(attention_mask[:, :, -1].squeeze(1).to(torch.bool)).contiguous()
+        #     if not torch.all(flash_attention_mask):
+        #         if attn_mask_type == AttnMaskType.causal:
+        #             attn_mask_type == AttnMaskType.paddedcausal
+        #         else:
+        #             attn_mask_type = AttnMaskType.padding
+        attn_mask_type = AttnMaskType.causal
+        flash_attention_mask = None
 
         scale = value.size(-1) ** -0.5
         if self.scale_attn_by_inverse_layer_idx:
             scale = scale * (1 / float(self.layer_idx + 1))
 
         # use coloattention
-        attention = ColoAttention(
-            embed_dim=self.embed_dim, num_heads=self.num_heads, dropout=self.attn_dropout.p, scale=scale
-        )
+        if not hasattr(self, "attention"):
+            self.attention = ColoAttention(
+                embed_dim=self.embed_dim, num_heads=self.num_heads, dropout=self.attn_dropout.p, scale=scale
+            )
 
-        attn_output = attention(query, key, value, attn_mask=flash_attention_mask, attn_mask_type=attn_mask_type)
+        attn_output = self.attention(query, key, value, attn_mask=flash_attention_mask, attn_mask_type=attn_mask_type)
+
+        # self.core_attention_flash = FlashSelfAttention(
+        #         causal=True, attention_dropout=self.attn_dropout.p
+        #     )
+        # attn_output = self.core_attention_flash(query, key, value)
+        # attn_output = rearrange(attn_output, 'b s h d -> b s (h d)').contiguous()
 
         attn_output = self.c_proj(attn_output)
         attn_output = self.resid_dropout(attn_output)
@@ -1076,12 +1166,12 @@ def get_lm_forward_with_dist_cross_entropy(shard_config: ShardConfig):
             loss_fct = CrossEntropyLoss()
             shift_logits = shift_logits.view(-1, shift_logits.size(-1))
             shift_labels = shift_labels.view(-1)
-            if shard_config.enable_tensor_parallelism:
-                loss = cross_entropy_1d(
-                    shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
-                )
-            else:
-                loss = loss_fct(shift_logits, shift_labels)
+            # if shard_config.enable_tensor_parallelism:
+            #     loss = cross_entropy_1d(
+            #         shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
+            #     )
+            # else:
+            loss = loss_fct(shift_logits, shift_labels)
 
         if not return_dict:
             output = (lm_logits,) + transformer_outputs[1:]

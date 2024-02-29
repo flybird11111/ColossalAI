@@ -277,7 +277,7 @@ def _send_recv_serialization_object(
             req.wait()
 
     # See the comment in `_batch_send_recv_tensor`
-    # torch.cuda.synchronize()
+    torch.cuda.synchronize()
 
     ops = []
 
@@ -297,7 +297,7 @@ def _send_recv_serialization_object(
             req.wait()
 
     # See the comment in `_batch_send_recv_tensor`
-    # torch.cuda.synchronize()
+    torch.cuda.synchronize()
 
     if recv_object_tensor is not None and recv_object_size_tensor is not None:
         recv_object_tensor = recv_object_tensor.type(torch.uint8)
@@ -399,7 +399,7 @@ def _communicate(
     recv_tensor_objs = _batch_send_recv_tensor(
         tensor_objs, recv_tensor_metadata, send_dst, recv_src, send_group, recv_group, current_device
     )
-
+    torch.cuda.synchronize()
     if metadata_recv is not None:
         assert isinstance(metadata_recv, P2PMetadata)
         tree_spec = metadata_recv.tree_spec
