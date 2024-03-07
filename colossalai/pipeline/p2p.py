@@ -16,6 +16,9 @@ from torch.utils._pytree import tree_flatten, tree_unflatten
 
 from .stage_manager import PipelineStageManager
 
+# SEND_OBJECTS = []
+# SEND_ID = 0
+
 
 def _cuda_safe_tensor_to_object(tensor: torch.Tensor, tensor_size: torch.Size) -> Any:
     """transform tensor to object with unpickle.
@@ -219,8 +222,16 @@ def _batch_send_recv_tensor(
         buffer_recv = _create_recv_buffer(recv_tensor_metadata, current_device)
 
     ops = []
+    global SEND_ID
     if send_dst is not None and send_tensor_list is not None:
         assert send_group is not None
+        # with open(f"/home/jiangmingyan/workspace/ColossalAI/colossalai/pipeline/send_tensor_list_shape_{torch.distributed.get_rank()}.txt", "a") as file:
+        #     file.write("send_list_len: " + str(len(send_tensor_list)) +", tensor_list: " + str([x.shape for x in send_tensor_list if x is not None]) + "\n")
+        # SEND_OBJECTS.extend([x.clone() for x in send_tensor_list if x is not None])
+        # for x in send_tensor_list:
+        #     if x is not None:
+        #         torch.save(x.clone(), f"/home/jiangmingyan/profile-data/profile3/shardformer/rank{torch.distributed.get_rank()}/send_tensor_{SEND_ID}.pt")
+        #         SEND_ID = SEND_ID + 1
         _filling_ops_queue(send_tensor_list, dist.isend, send_dst, ops, send_group)
     if recv_src is not None and buffer_recv is not None:
         assert recv_group is not None
@@ -235,7 +246,7 @@ def _batch_send_recv_tensor(
     # However, the Megatron-LM does synchronization here
     # https://github.com/microsoft/Megatron-DeepSpeed/blob/ef13d099c2a1609225a4ce4c1a1753cc76dd90a1/megatron/p2p_communication.py#L111-L112
     # In case there is potential error, uncomment the following `torch.cuda.synchronize()`
-    # torch.cuda.synchronize()
+    torch.cuda.synchronize()
 
     return buffer_recv
 

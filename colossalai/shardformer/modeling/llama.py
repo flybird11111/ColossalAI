@@ -278,15 +278,17 @@ class LlamaPipelineForwards:
                 shift_labels = shift_labels.view(-1)
                 # Enable model parallelism
                 shift_labels = shift_labels.to(shift_logits.device)
-                if shard_config.enable_tensor_parallelism:
-                    new_vocab_size = logits.shape[-1]
-                    shift_logits = shift_logits.view(-1, new_vocab_size)
-                    loss = cross_entropy_1d(
-                        shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
-                    )
-                else:
-                    shift_logits = shift_logits.view(-1, self.config.vocab_size)
-                    loss = loss_fct(shift_logits, shift_labels)
+                # if shard_config.enable_tensor_parallelism:
+                #     new_vocab_size = logits.shape[-1]
+                #     shift_logits = shift_logits.view(-1, new_vocab_size)
+                #     loss = cross_entropy_1d(
+                #         shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
+                #     )
+                # else:
+                #     shift_logits = shift_logits.view(-1, self.config.vocab_size)
+                #     loss = loss_fct(shift_logits, shift_labels)
+                shift_logits = shift_logits.view(-1, self.config.vocab_size)
+                loss = loss_fct(shift_logits, shift_labels)
 
             if not return_dict:
                 output = (logits,) + outputs[1:]
@@ -417,10 +419,94 @@ class LlamaPipelineForwards:
             return {"hidden_states": hidden_states}
 
 
+try:
+    from flash_attn.flash_attn_interface import flash_attn_unpadded_func
+except ImportError:
+    try:
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func as flash_attn_unpadded_func
+    except ImportError:
+        flash_attn_unpadded_func = None
+
+try:
+    from einops import rearrange
+except ImportError:
+    rearrange = None
+
+
+class FlashSelfAttention(torch.nn.Module):
+    """Implement the scaled dot product attention with softmax.
+    Arguments
+    ---------
+        softmax_scale: The temperature to use for the softmax attention.
+                      (default: 1/sqrt(d_keys) where d_keys is computed at
+                      runtime)
+        attention_dropout: The dropout rate to apply to the attention
+                           (default: 0.0)
+    """
+
+    def __init__(self, causal=False, softmax_scale=None, attention_dropout=0.0, device=None, dtype=None):
+        super().__init__()
+        assert flash_attn_unpadded_func is not None, (
+            "Please install FlashAttention first, " "e.g., with pip install flash-attn"
+        )
+        assert rearrange is not None, "Please install einops first, e.g., with pip install einops"
+        self.causal = causal
+        self.softmax_scale = softmax_scale
+        self.dropout_p = attention_dropout
+
+    def forward(self, q, k, v):
+        """Implements the multihead softmax attention.
+        Arguments
+        ---------
+            q, k, v: The tensor containing the query, key, and value. (B, S, H, D)
+        """
+
+        assert all((i.dtype in [torch.float16, torch.bfloat16] for i in (q, k, v)))
+        assert all((i.is_cuda for i in (q, k, v)))
+
+        batch_size, seqlen_q = q.shape[0], q.shape[1]
+        seqlen_k = k.shape[1]
+
+        q, k, v = [rearrange(x, "b s ... -> (b s) ...") for x in [q, k, v]]
+        cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32, device=q.device)
+
+        if self.training:
+            # during training q,k,v always have same seqlen
+            assert seqlen_k == seqlen_q
+
+            is_causal = self.causal
+            cu_seqlens_k = cu_seqlens_q
+            dropout_p = self.dropout_p
+        else:
+            # turn off FA causal mask after first inference autoregressive iteration
+            # only on first autoregressive step q,k,v have same seqlen
+            is_causal = seqlen_q == seqlen_k
+            cu_seqlens_k = torch.arange(
+                0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32, device=q.device
+            )
+            dropout_p = 0
+
+        output = flash_attn_unpadded_func(
+            q,
+            k,
+            v,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            seqlen_q,
+            seqlen_k,
+            dropout_p,
+            softmax_scale=self.softmax_scale,
+            causal=is_causal,
+        )
+
+        output = rearrange(output, "(b s) ... -> b s ...", b=batch_size)
+        return output
+
+
 def get_llama_flash_attention_forward(shard_config: ShardConfig):
     from transformers.models.llama.modeling_llama import LlamaAttention, apply_rotary_pos_emb
 
-    from colossalai.nn.layer.colo_attention import AttnMaskType, ColoAttention
+    from colossalai.nn.layer.colo_attention import AttnMaskType
 
     llama_version = 2
     try:
@@ -471,28 +557,30 @@ def get_llama_flash_attention_forward(shard_config: ShardConfig):
         key_states = key_states.transpose(1, 2).contiguous().view(*me_input_shape)
         value_states = value_states.transpose(1, 2).contiguous().view(*me_input_shape)
 
-        flash_attention_mask = None
-        attn_mask_type = AttnMaskType.causal
-        if not getattr(shard_config, "causal_lm", False) and attention_mask != None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                )
-            flash_attention_mask = ~(attention_mask[:, :, -1].squeeze(1).to(torch.bool)).contiguous()
-            attn_mask_type = AttnMaskType.paddedcausal
+        AttnMaskType.causal
+        # if not getattr(shard_config, "causal_lm", False) and attention_mask != None:
+        #     if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+        #         raise ValueError(
+        #             f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+        #         )
+        #     flash_attention_mask = ~(attention_mask[:, :, -1].squeeze(1).to(torch.bool)).contiguous()
+        #     attn_mask_type = AttnMaskType.paddedcausal
 
-        attention = ColoAttention(embed_dim=self.hidden_size, num_heads=self.num_heads)
-        attn_output = attention(
-            query_states,
-            key_states,
-            value_states,
-            attn_mask=flash_attention_mask,
-            attn_mask_type=attn_mask_type,
-            origin_attn_mask=attention_mask,
-        )
-
+        # if not hasattr(self, "attention"):
+        #     self.attention = ColoAttention(embed_dim=self.hidden_size, num_heads=self.num_heads)
+        # attn_output = self.attention(
+        #     query_states,
+        #     key_states,
+        #     value_states,
+        #     attn_mask=flash_attention_mask,
+        #     attn_mask_type=attn_mask_type,
+        #     origin_attn_mask=attention_mask,
+        # )
+        if not hasattr(self, "attention"):
+            self.core_attention_flash = FlashSelfAttention(causal=True, attention_dropout=0.0)
+        attn_output = self.core_attention_flash(query_states, key_states, value_states)
+        attn_output = rearrange(attn_output, "b s h d -> b s (h d)").contiguous()
         attn_output = self.o_proj(attn_output)
-
         return attn_output, None, past_key_value
 
     return forward

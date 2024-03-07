@@ -78,9 +78,9 @@ class MatmulWithAsyncCommunication(torch.autograd.Function):
         use_bias = ctx.use_bias
 
         # In order to be hooked into Gemini's '__torch_function__', adding a view operation to weight and bias.
-        weight = weight.view(weight.shape)
-        if bias is not None:
-            bias = bias.view(bias.shape)
+        # weight = weight.view(weight.shape)
+        # if bias is not None:
+        #     bias = bias.view(bias.shape)
 
         total_input = input
         grad_input = grad_output.matmul(weight.T)
@@ -129,8 +129,8 @@ class LinearWithAsyncCommunication(torch.autograd.Function):
         use_bias = ctx.use_bias
 
         # In order to be hooked into Gemini's '__torch_function__', adding a view operation to bias.
-        if use_bias:
-            bias.view(bias.shape)
+        # if use_bias:
+        #     bias.view(bias.shape)
 
         total_input = input
         grad_input = grad_output.matmul(weight)
@@ -204,8 +204,8 @@ class _LinearWithGatherForwardReduceScatterBackward(torch.autograd.Function):
         overlap = ctx.overlap
 
         # In order to be hooked into Gemini's '__torch_function__', adding a view operation to weight and bias. Used in FusedLayerNorm
-        if use_bias:
-            bias = bias.view(bias.shape)
+        # if use_bias:
+        #     bias = bias.view(bias.shape)
 
         if not overlap:
             input_parallel = _gather(input_, dim, process_group)
@@ -368,9 +368,9 @@ class _MatmulWithGatherForwardReduceScatterBackward(torch.autograd.Function):
         overlap = ctx.overlap
 
         # In order to be hooked into Gemini's '__torch_function__', adding a view operation to weight and bias. Used in FusedLayerNorm
-        weight = weight.view(weight.shape)
-        if use_bias:
-            bias = bias.view(bias.shape)
+        # weight = weight.view(weight.shape)
+        # if use_bias:
+        #     bias = bias.view(bias.shape)
 
         if not overlap:
             input_parallel = _gather(input_, dim, process_group)

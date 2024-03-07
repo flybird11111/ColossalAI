@@ -3,7 +3,8 @@ import resource
 from contextlib import nullcontext
 
 import torch
-from attn import SUPPORT_FLASH, replace_xformers
+
+# from attn import SUPPORT_FLASH, replace_xformers
 from torch.distributed.fsdp.fully_sharded_data_parallel import CPUOffload, MixedPrecision
 from tqdm import tqdm
 from transformers.models.llama.configuration_llama import LlamaConfig
@@ -59,7 +60,7 @@ def main():
     )
     parser.add_argument("-b", "--batch_size", type=int, default=2, help="Batch size")
     parser.add_argument("-s", "--num_steps", type=int, default=5, help="Number of steps to run")
-    parser.add_argument("-i", "--ignore_steps", type=int, default=2, help="Number of steps to ignore")
+    parser.add_argument("-i", "--ignore_steps", type=int, default=0, help="Number of steps to ignore")
     parser.add_argument("-g", "--grad_checkpoint", action="store_true", help="Use gradient checkpointing")
     parser.add_argument("-l", "--max_length", type=int, default=4096, help="Max sequence length")
     parser.add_argument(
@@ -138,10 +139,13 @@ def main():
         plugin = HybridParallelPlugin(
             tp_size=args.tp,
             pp_size=args.pp,
-            pp_style="interleaved",
+            pp_style="1f1b",
             zero_stage=args.zero,
-            num_model_chunks=2,
-            enable_fused_normalization=torch.cuda.is_available(),
+            num_model_chunks=1,
+            # enable_all_optimization=True,
+            enable_flash_attention=False,
+            # enable_fused_normalization=True,
+            # enable_fused_normalization=torch.cuda.is_available(),
             microbatch_size=args.mbs,
             precision="bf16",
         )
@@ -181,15 +185,16 @@ def main():
         else nullcontext()
     )
 
-    with init_ctx:
-        model = LlamaForCausalLM(config)
+    # with init_ctx:
+    #     model = LlamaForCausalLM(config)
+    model = LlamaForCausalLM(config)
 
     if args.grad_checkpoint:
         model.gradient_checkpointing_enable()
 
-    if args.xformers:
-        assert SUPPORT_FLASH, "Use flash attention while xfomers is not installed"
-        replace_xformers(model)
+    # if args.xformers:
+    #     assert SUPPORT_FLASH, "Use flash attention while xfomers is not installed"
+    #     replace_xformers(model)
 
     model_numel = get_model_numel(model)
     coordinator.print_on_master(f"Model params: {format_numel_str(model_numel)}")
@@ -215,15 +220,42 @@ def main():
     )
 
     if isinstance(plugin, HybridParallelPlugin) and args.pp > 1:
+        print("use pp use pp")
         data_iter = iter(dataloader)
         for step in tqdm(range(len(dataloader)), desc="Step", disable=not coordinator.is_master()):
-            performance_evaluator.on_step_start(step)
-            booster.execute_pipeline(
-                data_iter, model, criterion=lambda outputs, inputs: outputs[0], optimizer=optimizer, return_loss=False
-            )
-            optimizer.step()
-            optimizer.zero_grad()
-            performance_evaluator.on_step_end(input_ids=torch.empty(args.batch_size, args.max_length))
+            if step != 48:
+                performance_evaluator.on_step_start(step)
+                booster.execute_pipeline(
+                    data_iter,
+                    model,
+                    criterion=lambda outputs, inputs: outputs[0],
+                    optimizer=optimizer,
+                    return_loss=False,
+                )
+                optimizer.step()
+                optimizer.zero_grad()
+                performance_evaluator.on_step_end(input_ids=torch.empty(args.batch_size, args.max_length))
+            else:
+                with torch.profiler.profile(
+                    activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                    schedule=torch.profiler.schedule(wait=1, warmup=2, active=3, repeat=5),
+                    on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                        "/home/jiangmingyan/workspace/trace/pp/profile/LLAMA-13-bf16/shardformer-tmp/"
+                    ),
+                    with_stack=True,
+                    record_shapes=True,
+                ) as prof:
+                    for _ in range(0 + 2 + 5):
+                        booster.execute_pipeline(
+                            data_iter,
+                            model,
+                            criterion=lambda outputs, inputs: outputs[0],
+                            optimizer=optimizer,
+                            return_loss=False,
+                        )
+                        optimizer.step()
+                        optimizer.zero_grad()
+                        prof.step()
     else:
         for step, batch in enumerate(tqdm(dataloader, desc="Step", disable=not coordinator.is_master())):
             performance_evaluator.on_step_start(step)

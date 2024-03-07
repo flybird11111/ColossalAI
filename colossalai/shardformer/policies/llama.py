@@ -8,11 +8,7 @@ from torch.nn import Module
 
 from colossalai.shardformer.layer import FusedRMSNorm, Linear1D_Col, Linear1D_Row, RMSNorm, VocabParallelEmbedding1D
 
-from ..modeling.llama import (
-    LlamaPipelineForwards,
-    get_llama_flash_attention_forward,
-    get_lm_forward_with_dist_cross_entropy,
-)
+from ..modeling.llama import LlamaPipelineForwards, get_llama_flash_attention_forward
 from .base_policy import ModulePolicyDescription, Policy, SubModuleReplacementDescription
 
 __all__ = ["LlamaPolicy", "LlamaForCausalLMPolicy", "LlamaForSequenceClassificationPolicy"]
@@ -257,9 +253,11 @@ class LlamaForCausalLMPolicy(LlamaPolicy):
             new_item = {
                 LlamaForCausalLM: ModulePolicyDescription(
                     sub_module_replacement=[
-                        SubModuleReplacementDescription(suffix="lm_head", target_module=Linear1D_Col)
+                        SubModuleReplacementDescription(
+                            suffix="lm_head", target_module=Linear1D_Col, kwargs={"gather_output": True}
+                        )
                     ],
-                    method_replacement={"forward": get_lm_forward_with_dist_cross_entropy(self.shard_config)},
+                    # method_replacement={"forward": get_lm_forward_with_dist_cross_entropy(self.shard_config)},
                 )
             }
             policy.update(new_item)

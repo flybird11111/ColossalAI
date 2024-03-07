@@ -98,6 +98,7 @@ class GPT2PipelineForwards:
             batch_size = hidden_states.shape[0]
 
         # GPT2Attention mask.
+        attention_mask = None
         if attention_mask is not None:
             if batch_size <= 0:
                 raise ValueError("batch_size has to be defined and > 0")
@@ -808,8 +809,6 @@ class FlashSelfAttention(torch.nn.Module):
 def get_gpt2_flash_attention_forward():
     from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 
-    from colossalai.nn.layer.colo_attention import AttnMaskType, ColoAttention
-
     def split_heads(tensor, num_heads, attn_head_size):
         """
         Splits hidden_size dim into attn_head_size and num_heads
@@ -868,26 +867,26 @@ def get_gpt2_flash_attention_forward():
         #             attn_mask_type == AttnMaskType.paddedcausal
         #         else:
         #             attn_mask_type = AttnMaskType.padding
-        attn_mask_type = AttnMaskType.causal
-        flash_attention_mask = None
 
-        scale = value.size(-1) ** -0.5
-        if self.scale_attn_by_inverse_layer_idx:
-            scale = scale * (1 / float(self.layer_idx + 1))
+        # attn_mask_type = AttnMaskType.causal
+        # flash_attention_mask = None
+
+        # scale = value.size(-1) ** -0.5
+        # if self.scale_attn_by_inverse_layer_idx:
+        #     scale = scale * (1 / float(self.layer_idx + 1))
 
         # use coloattention
-        if not hasattr(self, "attention"):
-            self.attention = ColoAttention(
-                embed_dim=self.embed_dim, num_heads=self.num_heads, dropout=self.attn_dropout.p, scale=scale
-            )
-
-        attn_output = self.attention(query, key, value, attn_mask=flash_attention_mask, attn_mask_type=attn_mask_type)
-
-        # self.core_attention_flash = FlashSelfAttention(
-        #         causal=True, attention_dropout=self.attn_dropout.p
+        # if not hasattr(self, "attention"):
+        #     self.attention = ColoAttention(
+        #         embed_dim=self.embed_dim, num_heads=self.num_heads, dropout=self.attn_dropout.p, scale=scale
         #     )
-        # attn_output = self.core_attention_flash(query, key, value)
-        # attn_output = rearrange(attn_output, 'b s h d -> b s (h d)').contiguous()
+
+        # attn_output = self.attention(query, key, value, attn_mask=flash_attention_mask, attn_mask_type=attn_mask_type)
+
+        if not hasattr(self, "core_attention_flash"):
+            self.core_attention_flash = FlashSelfAttention(causal=True, attention_dropout=self.attn_dropout.p)
+        attn_output = self.core_attention_flash(query, key, value)
+        attn_output = rearrange(attn_output, "b s h d -> b s (h d)").contiguous()
 
         attn_output = self.c_proj(attn_output)
         attn_output = self.resid_dropout(attn_output)
@@ -927,10 +926,10 @@ def gpt2_sequence_parallel_forward_fn(shard_config: ShardConfig):
         elif input_ids is not None:
             input_shape = input_ids.size()
             input_ids = input_ids.view(-1, input_shape[-1])
-            batch_size = input_ids.shape[0]
+            input_ids.shape[0]
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
-            batch_size = inputs_embeds.shape[0]
+            inputs_embeds.shape[0]
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
@@ -951,24 +950,24 @@ def gpt2_sequence_parallel_forward_fn(shard_config: ShardConfig):
             position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
 
         # GPT2Attention mask.
-        if attention_mask is not None:
-            if batch_size <= 0:
-                raise ValueError("batch_size has to be defined and > 0")
-            attention_mask = attention_mask.view(batch_size, -1)
-            # We create a 3D attention mask from a 2D tensor mask.
-            # Sizes are [batch_size, 1, 1, to_seq_length]
-            # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
-            # this attention mask is more simple than the triangular masking of causal attention
-            # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
-            attention_mask = attention_mask[:, None, None, :]
+        # if attention_mask is not None:
+        #     if batch_size <= 0:
+        #         raise ValueError("batch_size has to be defined and > 0")
+        #     attention_mask = attention_mask.view(batch_size, -1)
+        #     # We create a 3D attention mask from a 2D tensor mask.
+        #     # Sizes are [batch_size, 1, 1, to_seq_length]
+        #     # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
+        #     # this attention mask is more simple than the triangular masking of causal attention
+        #     # used in OpenAI GPT, we just need to prepare the broadcast dimension here.
+        #     attention_mask = attention_mask[:, None, None, :]
 
-            # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
-            # masked positions, this operation will create a tensor which is 0.0 for
-            # positions we want to attend and the dtype's smallest value for masked positions.
-            # Since we are adding it to the raw scores before the softmax, this is
-            # effectively the same as removing these entirely.
-            attention_mask = attention_mask.to(dtype=self.dtype)  # fp16 compatibility
-            attention_mask = (1.0 - attention_mask) * torch.finfo(self.dtype).min
+        #     # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
+        #     # masked positions, this operation will create a tensor which is 0.0 for
+        #     # positions we want to attend and the dtype's smallest value for masked positions.
+        #     # Since we are adding it to the raw scores before the softmax, this is
+        #     # effectively the same as removing these entirely.
+        #     attention_mask = attention_mask.to(dtype=self.dtype)  # fp16 compatibility
+        #     attention_mask = (1.0 - attention_mask) * torch.finfo(self.dtype).min
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]

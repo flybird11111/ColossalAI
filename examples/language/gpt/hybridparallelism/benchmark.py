@@ -204,7 +204,7 @@ def main():
     if isinstance(plugin, HybridParallelPlugin) and args.pp > 1:
         data_iter = iter(dataloader)
         for step in tqdm(range(len(dataloader)), desc="Step", disable=not coordinator.is_master()):
-            if step != 48:
+            if step != 448:
                 performance_evaluator.on_step_start(step)
                 booster.execute_pipeline(
                     data_iter,
@@ -221,7 +221,7 @@ def main():
                     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
                     schedule=torch.profiler.schedule(wait=1, warmup=2, active=3, repeat=5),
                     on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                        "/home/jiangmingyan/workspace/trace/pp/profile/GPT2-11-bf16/shardformer/"
+                        "/home/jiangmingyan/workspace/trace/pp/profile/GPT2-12-bf16/shardformer-sync-shared-param/"
                     ),
                     with_stack=True,
                     record_shapes=True,
@@ -238,6 +238,29 @@ def main():
                         optimizer.zero_grad()
                         prof.step()
             coordinator.print_on_master(f"Max CUDA memory usage: {torch.cuda.max_memory_allocated()/1024**2:.2f} MB")
+        #     if step == 6:
+        #         break
+        #     with torch.profiler.profile(
+        #         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+        #         schedule=torch.profiler.schedule(wait=1, warmup=2, active=3, repeat=0),
+        #         on_trace_ready=torch.profiler.tensorboard_trace_handler(
+        #             "/home/jiangmingyan/workspace/trace/pp/profile/GPT2-12-bf16/shardformer-5/"
+        #         ),
+        #         with_stack=True,
+        #         record_shapes=True,
+        #     ) as prof:
+        #         for _ in range(1 + 2 + 3):
+        #             booster.execute_pipeline(
+        #                 data_iter,
+        #                 model,
+        #                 criterion=lambda outputs, inputs: outputs[0],
+        #                 optimizer=optimizer,
+        #                 return_loss=False,
+        #             )
+        #             optimizer.step()
+        #             optimizer.zero_grad()
+        #             prof.step()
+        # coordinator.print_on_master(f"Max CUDA memory usage: {torch.cuda.max_memory_allocated()/1024**2:.2f} MB")
     else:
         for step, batch in enumerate(tqdm(dataloader, desc="Step", disable=not coordinator.is_master())):
             performance_evaluator.on_step_start(step)
@@ -251,6 +274,12 @@ def main():
 
     performance_evaluator.on_fit_end()
     coordinator.print_on_master(f"Max CUDA memory usage: {torch.cuda.max_memory_allocated()/1024**2:.2f} MB")
+    # from colossalai.pipeline.p2p import SEND_OBJECTS
+    # for tensor in SEND_OBJECTS:
+    #     assert tensor.dtype == torch.bfloat16
+    #     assert tensor.grad is None
+    # print(f"tensor_list_rank{torch.distributed.get_rank()}: {len(SEND_OBJECTS)}")
+    # torch.save(SEND_OBJECTS, f"/home/jiangmingyan/workspace/ColossalAI/colossalai/pipeline/send_tensor_list_{torch.distributed.get_rank()}.pt")
 
 
 if __name__ == "__main__":
