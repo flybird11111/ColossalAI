@@ -33,6 +33,7 @@ class GPT2Policy(Policy):
         Reshape the Embedding layer to make the embedding dimension divisible by world_size
         """
         self.tie_weight = self.tie_weight_check()
+
         return self.model
 
     def module_policy(self):
