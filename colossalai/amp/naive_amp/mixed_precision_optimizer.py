@@ -91,8 +91,7 @@ class MixedPrecisionOptimizer(OptimizerWrapper):
 
     def backward_by_grad(self, tensor: Tensor, grad: Tensor):
         grad = self.mixed_precision.pre_backward_by_grad(tensor, grad)
-        # tensor.backward(grad)
-        torch.autograd.backward(tensor, grad_tensors=grad)
+        tensor.backward(grad)
 
     def zero_grad(self, *args, **kwargs):
         for p in self.working_to_master_map.keys():

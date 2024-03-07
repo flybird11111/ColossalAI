@@ -195,7 +195,6 @@ class Linear1D_Col(ParallelModule):
         input_parallel = input_
 
         # Matrix multiply.
-        self.skip_bias_add = True
         bias = self.bias if not self.skip_bias_add else None
         if self.seq_parallel:
             output_parallel = linear_gather_forward_reducescatter_backward(
@@ -210,11 +209,10 @@ class Linear1D_Col(ParallelModule):
         else:
             output = output_parallel
 
-        # if self.skip_bias_add:
-        #     return output, self.bias
-        # else:
-        #     return output
-        return output
+        if self.skip_bias_add:
+            return output, self.bias
+        else:
+            return output
 
 
 class Linear1D_Row(ParallelModule):
@@ -418,10 +416,9 @@ class Linear1D_Row(ParallelModule):
             else:
                 output = reduce_forward(output_parallel, self.process_group)
 
-        # if not self.skip_bias_add:
-        #     if self.bias is not None:
-        #         output = output + self.bias
-        #     return output
-        # else:
-        #     return output, self.bias
-        return output
+        if not self.skip_bias_add:
+            if self.bias is not None:
+                output = output + self.bias
+            return output
+        else:
+            return output, self.bias

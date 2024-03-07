@@ -406,7 +406,6 @@ class OneForwardOneBackwardSchedule(PipelineSchedule):
             output_obj = output_objs.pop(0)
 
             output_obj_grad = self.recv_backward()
-            # print("print(output_obj_grad.shape)", output_obj_grad["hidden_states"].shape)
             input_obj_grad = self.backward_step(optimizer, input_obj, output_obj, output_obj_grad)
             self.send_backward(input_obj_grad)
 

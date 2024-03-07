@@ -144,7 +144,6 @@ def main():
             num_model_chunks=1,
             # enable_all_optimization=True,
             enable_flash_attention=False,
-            # enable_fused_normalization=True,
             # enable_fused_normalization=torch.cuda.is_available(),
             microbatch_size=args.mbs,
             precision="bf16",
@@ -185,9 +184,8 @@ def main():
         else nullcontext()
     )
 
-    # with init_ctx:
-    #     model = LlamaForCausalLM(config)
-    model = LlamaForCausalLM(config)
+    with init_ctx:
+        model = LlamaForCausalLM(config)
 
     if args.grad_checkpoint:
         model.gradient_checkpointing_enable()
@@ -220,42 +218,19 @@ def main():
     )
 
     if isinstance(plugin, HybridParallelPlugin) and args.pp > 1:
-        print("use pp use pp")
         data_iter = iter(dataloader)
         for step in tqdm(range(len(dataloader)), desc="Step", disable=not coordinator.is_master()):
-            if step != 48:
-                performance_evaluator.on_step_start(step)
-                booster.execute_pipeline(
-                    data_iter,
-                    model,
-                    criterion=lambda outputs, inputs: outputs[0],
-                    optimizer=optimizer,
-                    return_loss=False,
-                )
-                optimizer.step()
-                optimizer.zero_grad()
-                performance_evaluator.on_step_end(input_ids=torch.empty(args.batch_size, args.max_length))
-            else:
-                with torch.profiler.profile(
-                    activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-                    schedule=torch.profiler.schedule(wait=1, warmup=2, active=3, repeat=5),
-                    on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                        "/home/jiangmingyan/workspace/trace/pp/profile/LLAMA-13-bf16/shardformer-tmp/"
-                    ),
-                    with_stack=True,
-                    record_shapes=True,
-                ) as prof:
-                    for _ in range(0 + 2 + 5):
-                        booster.execute_pipeline(
-                            data_iter,
-                            model,
-                            criterion=lambda outputs, inputs: outputs[0],
-                            optimizer=optimizer,
-                            return_loss=False,
-                        )
-                        optimizer.step()
-                        optimizer.zero_grad()
-                        prof.step()
+            performance_evaluator.on_step_start(step)
+            booster.execute_pipeline(
+                data_iter,
+                model,
+                criterion=lambda outputs, inputs: outputs[0],
+                optimizer=optimizer,
+                return_loss=False,
+            )
+            optimizer.step()
+            optimizer.zero_grad()
+            performance_evaluator.on_step_end(input_ids=torch.empty(args.batch_size, args.max_length))
     else:
         for step, batch in enumerate(tqdm(dataloader, desc="Step", disable=not coordinator.is_master())):
             performance_evaluator.on_step_start(step)

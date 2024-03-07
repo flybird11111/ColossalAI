@@ -333,7 +333,7 @@ class GPT2PipelineForwards:
             #         shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
             #     )
             # else:
-            # loss = loss_fct(shift_logits, shift_labels)
+            #     loss = loss_fct(shift_logits, shift_labels)
             loss = loss_fct(shift_logits, shift_labels)
 
         if not return_dict:
@@ -843,9 +843,6 @@ def get_gpt2_flash_attention_forward():
         query = split_heads(query, self.num_heads, self.head_dim)
         key = split_heads(key, self.num_heads, self.head_dim)
         value = split_heads(value, self.num_heads, self.head_dim)
-        # print("query.shape", query.shape)
-        # print("key.shape", key.shape)
-        # print("value.shape", value.shape)
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -1170,6 +1167,7 @@ def get_lm_forward_with_dist_cross_entropy(shard_config: ShardConfig):
             #         shift_logits, shift_labels, process_group=shard_config.tensor_parallel_process_group
             #     )
             # else:
+            #     loss = loss_fct(shift_logits, shift_labels)
             loss = loss_fct(shift_logits, shift_labels)
 
         if not return_dict:

@@ -304,10 +304,9 @@ class VocabParallelEmbedding1D(ParallelModule):
         masked_input = input_.clone() - self.vocab_start_index
         masked_input[input_mask] = 0
 
-        # output_parallel = F.embedding(
-        #     masked_input, self.weight, self.padding_idx, *self.embed_args, **self.embed_kwargs
-        # )
-        output_parallel = self.weight[masked_input]
+        output_parallel = F.embedding(
+            masked_input, self.weight, self.padding_idx, *self.embed_args, **self.embed_kwargs
+        )
 
         # Mask the output embedding.
         embedding_output = output_parallel.clone()
