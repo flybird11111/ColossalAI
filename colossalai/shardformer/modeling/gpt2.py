@@ -25,7 +25,7 @@ from colossalai.shardformer.layer._operation import gather_forward_split_backwar
 from colossalai.shardformer.shard import ShardConfig
 
 from ..layer import cross_entropy_1d
-from ..layer._operation import _gather
+from ..layer._operation import gather_forward_split_backward
 
 class GPT2PipelineForwards:
     """
@@ -341,7 +341,7 @@ class GPT2PipelineForwards:
                 loss = loss_fct(shift_logits, shift_labels)
 
             if not shard_config.parallel_output:
-                lm_logits = _gather(lm_logits, -1, shard_config.tensor_parallel_process_group)
+                lm_logits = gather_forward_split_backward(lm_logits, -1, shard_config.tensor_parallel_process_group)
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
