@@ -5,11 +5,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.nn import Module
-from colossalai.lazy.lazy_init import LazyInitContext
 
 from colossalai.pipeline.stage_manager import PipelineStageManager
 
@@ -243,7 +241,6 @@ class Policy(ABC):
             start_idx = num_layers_per_stage_accumulated[stage + model_chunk * num_stages]
             end_idx = num_layers_per_stage_accumulated[stage + model_chunk * num_stages + 1]
             stage_indices.append([start_idx, end_idx])
-
         return stage_indices[0] if num_model_chunks == 1 else stage_indices
 
     def tie_weight_check(self):

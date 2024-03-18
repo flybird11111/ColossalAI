@@ -1045,7 +1045,6 @@ class HybridParallelPlugin(PipelinePluginBase):
             enable_sequence_parallelism=enable_sequence_parallelism,
             enable_sequence_overlap=enable_sequence_overlap,
             parallel_output=parallel_output,
-            make_vocab_size_divisible_by=make_vocab_size_divisible_by,
         )
         self.amp_config = dict(
             initial_scale=initial_scale,
