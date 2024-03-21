@@ -3,7 +3,11 @@
 
 import itertools
 from abc import ABC, abstractmethod
+<<<<<<< HEAD
 from typing import List, Optional, Union
+=======
+from typing import List, Union, Optional
+>>>>>>> padding vocab
 
 import torch
 import torch.nn as nn

@@ -30,7 +30,11 @@ from ._operation import (
     reduce_forward,
     split_forward_gather_backward,
 )
+<<<<<<< HEAD
 from .parallel_module import PaddingParallelModule, ParallelModule
+=======
+from .parallel_module import ParallelModule, PaddingParallelModule
+>>>>>>> padding vocab
 from .utils import create_randomizer_with_offset
 
 __all__ = ["Linear1D_Col", "Linear1D_Row"]
@@ -600,8 +604,28 @@ class VocabParallelLMHead1D(Linear1D_Col, PaddingParallelModule):
         out_features = module.out_features
         bias = module.bias is not None
         device = module.weight.device
+<<<<<<< HEAD
 
         lm_head_linear = VocabParallelLMHead1D(
+=======
+        # ensure only one process group is passed
+        if isinstance(process_group, (list, tuple)):
+            assert len(process_group) == 1, f"Expected only one process group, got {len(process_group)}."
+            process_group = process_group[0]
+
+        tp_size = dist.get_world_size(process_group)
+        if out_features < tp_size:
+            return module
+
+        # if out_features % tp_size != 0:
+        #     raise ValueError(
+        #         f"The size of out_features:{out_features} is not integer multiples of tensor parallel size: {tp_size}!"
+        #     )
+        
+        make_vocab_size_divisible_by = kwargs.pop("make_vocab_size_divisible_by", 128)
+
+        lm_head_linear = LmHead_Linear_Col(
+>>>>>>> padding vocab
             in_features=in_features,
             out_features=out_features,
             bias=bias,

@@ -340,9 +340,6 @@ class GPT2PipelineForwards:
             else:
                 loss = loss_fct(shift_logits, shift_labels)
 
-            if not shard_config.parallel_output:
-                lm_logits = gather_forward_split_backward(lm_logits, -1, shard_config.tensor_parallel_process_group)
-
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
             return ((loss,) + output) if loss is not None else output

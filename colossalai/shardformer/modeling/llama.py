@@ -570,7 +570,7 @@ def get_lm_forward_with_dist_cross_entropy(shard_config: ShardConfig):
             logits = torch.cat(logits, dim=-1)
         else:
             logits = self.lm_head(hidden_states)
-        logits = logits.float()
+            logits = logits.float()
 
         loss = None
         if labels is not None:
