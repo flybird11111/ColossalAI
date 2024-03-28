@@ -507,9 +507,14 @@ class PaddingLMHead(PaddingParallelModule):
         output = F.linear(input, self.weight, self.bias)
         output = output[..., : self.old_num_embeddings]
         return output
+<<<<<<< HEAD
 
 
 class VocabParallelLMHead1D(Linear1D_Col, PaddingParallelModule):
+=======
+    
+class VocabParallelLMHead1D(PaddingParallelModule, Linear1D_Col):
+>>>>>>> fix
     r"""Linear layer with column parallelism.
 
     The linear layer is defined as :math:`Y = XA + b`. A is parallelized along

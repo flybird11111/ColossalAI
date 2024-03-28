@@ -47,6 +47,7 @@ class OPTPolicy(Policy):
         self.tie_weight = self.tie_weight_check()
         return self.model
 
+
     def module_policy(self):
         from transformers.models.opt.modeling_opt import OPTAttention, OPTDecoder, OPTDecoderLayer
 

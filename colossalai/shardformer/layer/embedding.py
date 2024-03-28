@@ -302,6 +302,10 @@ class VocabParallelEmbedding1D(PaddingParallelModule):
 
         # resize vocabulary size
         super().__init__(self.num_embeddings, num_embeddings, weight)
+<<<<<<< HEAD
+=======
+        self.resize_embedding_weight()
+>>>>>>> fix
 
         # deal with tensor parallelism
         self.num_embeddings_per_partition = divide(self.num_embeddings, tensor_parallel_size)
