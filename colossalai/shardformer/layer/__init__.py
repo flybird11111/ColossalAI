@@ -1,11 +1,6 @@
 from .dropout import DropoutForParallelInput, DropoutForReplicatedInput
-<<<<<<< HEAD
 from .embedding import Embedding1D, PaddingEmbedding, VocabParallelEmbedding1D
 from .linear import Linear1D_Col, Linear1D_Row, PaddingLMHead, VocabParallelLMHead1D
-=======
-from .embedding import Embedding1D, VocabParallelEmbedding1D, PaddingEmbedding
-from .linear import Linear1D_Col, Linear1D_Row, LmHead_Linear_Col
->>>>>>> padding vocab
 from .loss import cross_entropy_1d
 from .normalization import FusedLayerNorm, FusedRMSNorm, LayerNorm, RMSNorm
 from .parallel_module import ParallelModule
