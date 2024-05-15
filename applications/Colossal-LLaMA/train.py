@@ -18,7 +18,6 @@ from colossal_llama.dataset.loader import (
     load_tokenized_dataset,
 )
 from colossal_llama.utils.ckpt_io import load_checkpoint, save_checkpoint
-from colossal_llama.utils.flash_attention_patch import replace_with_flash_attention
 from colossal_llama.utils.froze import freeze_non_embeds_parameters
 from colossal_llama.utils.neftune_patch import activate_neftune, deactivate_neftune
 from torch.utils.tensorboard import SummaryWriter
@@ -187,6 +186,7 @@ def main() -> None:
             zero_stage=args.zero,
             max_norm=args.grad_clip,
             precision=args.mixed_precision,
+            enable_flash_attention=args.use_flash_attn,
         )
     else:
         raise ValueError(f"Unknown plugin {args.plugin}")
@@ -245,9 +245,9 @@ def main() -> None:
     if args.use_grad_checkpoint:
         model.gradient_checkpointing_enable()
         coordinator.print_on_master(msg="Gradient checkpointing enabled successfully")
-    if args.use_flash_attn:
-        replace_with_flash_attention(model=model)
-        coordinator.print_on_master(msg="Flash-attention enabled successfully")
+    # if args.use_flash_attn:
+    #     replace_with_flash_attention(model=model)
+    #     coordinator.print_on_master(msg="Flash-attention enabled successfully")
 
     model_numel = get_model_numel(model)
     coordinator.print_on_master(f"Model params: {format_numel_str(model_numel)}")
@@ -335,6 +335,7 @@ def main() -> None:
     dataloader.sampler.set_start_index(start_index=sampler_start_idx)
 
     for epoch in range(start_epoch, args.num_epochs):
+        print("start epoch")
         dataloader.sampler.set_epoch(epoch=epoch)
         pbar = tqdm(
             desc=f"Epoch {epoch}",
@@ -344,6 +345,7 @@ def main() -> None:
         )
         total_loss = torch.tensor(0.0, device=get_current_device())
         for step, batch in enumerate(dataloader, start=start_step):
+            print("start_step", start_step)
             batch = {k: v.to(get_current_device()) for k, v in batch.items() if isinstance(v, torch.Tensor)}
 
             batch_output = model(**batch)
