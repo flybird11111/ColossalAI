@@ -17,11 +17,13 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 import colossalai
 from colossalai.accelerator import get_accelerator
 from colossalai.booster import Booster
-from colossalai.booster.plugin import GeminiPlugin, HybridParallelPlugin, TorchFSDPPlugin
+from colossalai.booster.plugin import GeminiPlugin, HybridParallelPlugin, LowLevelZeroPlugin, TorchFSDPPlugin
 from colossalai.cluster import DistCoordinator
 from colossalai.lazy import LazyInitContext
 from colossalai.nn.optimizer import HybridAdam
 from colossalai.shardformer import PipelineGradientCheckpointConfig
+
+# torch._dynamo.config.optimize_ddp=False
 
 warnings.filterwarnings("ignore")
 # ==============================
@@ -64,7 +66,7 @@ def main():
     parser.add_argument(
         "-p",
         "--plugin",
-        choices=["gemini", "gemini_auto", "fsdp", "fsdp_cpu", "3d", "3d_cpu"],
+        choices=["gemini", "gemini_auto", "fsdp", "fsdp_cpu", "3d", "3d_cpu", "zero"],
         default="gemini",
         help="Choose which plugin to use",
     )
@@ -101,6 +103,7 @@ def main():
     parser.add_argument("--use_fp8_comm", action="store_true", default=False, help="for using fp8 during communication")
     parser.add_argument("--overlap_allgather", action="store_true")
     parser.add_argument("--use_fp8", action="store_true")
+    parser.add_argument("--lora_rank", type=int, default=0, help="use lora")
     args = parser.parse_args()
 
     colossalai.launch_from_torch()
@@ -204,7 +207,7 @@ def main():
             zero_stage=args.zero,
             sp_size=args.sp,
             enable_sequence_parallelism=args.sp > 1,
-            enable_fused_normalization=torch.cuda.is_available(),
+            enable_fused_normalization=False,
             enable_flash_attention=args.xformers,
             microbatch_size=args.mbs,
             precision="bf16",
@@ -215,6 +218,14 @@ def main():
             use_fp8=args.use_fp8,
             **hybrid_kwargs,
         )
+    elif args.plugin == "zero":
+        plugin = LowLevelZeroPlugin(
+            initial_scale=2**5,
+            stage=args.zero,
+            overlap_allgather=args.overlap_allgather,
+            fp8_communication=args.use_fp8_comm,
+            use_fp8=args.use_fp8,
+        )
     elif args.plugin == "3d_cpu":
         plugin = HybridParallelPlugin(
             tp_size=args.tp,
@@ -223,7 +234,7 @@ def main():
             num_model_chunks=args.n_chunks,
             zero_stage=args.zero,
             cpu_offload=True,
-            enable_fused_normalization=torch.cuda.is_available(),
+            enable_fused_normalization=False,
             enable_flash_attention=args.xformers,
             microbatch_size=args.mbs,
             initial_scale=2**8,
@@ -256,10 +267,9 @@ def main():
     # ==============================
     init_ctx = (
         LazyInitContext(default_device=get_accelerator().get_current_device())
-        if isinstance(plugin, (GeminiPlugin, HybridParallelPlugin))
+        if isinstance(plugin, (GeminiPlugin, HybridParallelPlugin)) and args.lora_rank == 0
         else nullcontext()
     )
-
     init_kwargs = {}
     if config.model_type == "chatglm":
         init_kwargs["empty_init"] = False
@@ -276,6 +286,23 @@ def main():
         model.gradient_checkpointing_enable()
         if config.model_type == "chatglm":
             model.transformer.encoder.gradient_checkpointing = True
+
+    # test lora
+    if args.lora_rank > 0:
+        if args.use_fp8:
+            assert args.lora_rank % 16 == 0, "when use fp8 trainning, the lora rank should be divisable by 16"
+        from peft import LoraConfig
+
+        config_params = {
+            "init_lora_weights": "pissa_niter_4",  # Initialize the PiSSA with fast SVD, which completes in just a few seconds.
+            "task_type": "CAUSAL_LM",
+            "r": 32,
+            "lora_alpha": args.lora_rank,
+            "lora_dropout": 0.1,
+        }
+
+        lora_config = LoraConfig(**config_params)
+        model = plugin.enable_lora(model, lora_config=lora_config)
 
     model_numel = get_model_numel(model)
     coordinator.print_on_master(f"Model params: {format_numel_str(model_numel)}")
