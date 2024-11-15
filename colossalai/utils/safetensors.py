@@ -27,6 +27,52 @@ class PreparedData:
     offset: int
 
 
+def flatten_dict(nested_dict, parent_key="", separator="^"):
+    """
+    Flatten a nested dictionary, generating a flattened dictionary where the keys are joined by the specified separator.
+
+    nested_dict: The input nested dictionary.
+    parent_key: The parent key currently being processed.
+    separator: The separator used to join keys, default is '_', but can be customized to another symbol. :return: A flattened dictionary."
+    """
+    items = []
+    for k, v in nested_dict.items():
+        new_key = f"{parent_key}{separator}{k}" if parent_key else str(k)
+        if isinstance(v, dict):
+            items.extend(flatten_dict(v, new_key, separator).items())
+        else:
+            items.append((new_key, v))
+
+    return dict(items)
+
+
+def unflatten_dict(flattened_dict, separator="^"):
+    """
+    Restore a flattened dictionary back to a multi-level nested dictionary.
+
+    flattened_dict: The flattened dictionary.
+    separator: The separator used during flattening, default is '_', but can be customized to another symbol. :return: The restored nested dictionary.
+    """
+    nested_dict = {}
+    for key, value in flattened_dict.items():
+        keys = key.split(separator)
+        if len(keys) == 1:
+            return flattened_dict
+        try:
+            keys[0] = int(keys[0])
+        except ValueError:
+            raise (f"{keys[0]} can't convert to integer")
+        d = nested_dict
+        for part in keys[:-1]:
+            if part not in d:
+                d[part] = {}
+            d = d[part]
+        assert isinstance(value, torch.Tensor)
+        d[keys[-1]] = value
+
+    return nested_dict
+
+
 def prepare(data: Dict[str, torch.Tensor]) -> Tuple[PreparedData, List[torch.Tensor], List[str]]:
     sorted_data = sorted(data.items(), key=lambda x: (x[1].dtype, x[0]))
 

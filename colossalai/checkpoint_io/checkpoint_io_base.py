@@ -213,6 +213,7 @@ class CheckpointIO(ABC):
         gather_dtensor=True,
         prefix: str = None,
         size_per_shard: int = 1024,
+        use_async: bool = False,
     ):
         """
         Save optimizer to checkpoint. Optimizer states saving is not compatible with safetensors.
@@ -231,9 +232,11 @@ class CheckpointIO(ABC):
         """
 
         if shard:
-            self.save_sharded_optimizer(optimizer, checkpoint, gather_dtensor, prefix, size_per_shard)
+            self.save_sharded_optimizer(
+                optimizer, checkpoint, gather_dtensor, prefix, size_per_shard, use_async=use_async
+            )
         else:
-            self.save_unsharded_optimizer(optimizer, checkpoint, gather_dtensor)
+            self.save_unsharded_optimizer(optimizer, checkpoint, gather_dtensor, use_async=use_async)
 
     # ========================================================
     # Abstract methods for model loading/saving implementation
@@ -326,7 +329,13 @@ class CheckpointIO(ABC):
 
     @abstractmethod
     def save_sharded_optimizer(
-        self, optimizer: Optimizer, checkpoint: Path, gather_dtensor: bool, prefix: str, size_per_shard: int
+        self,
+        optimizer: Optimizer,
+        checkpoint: Path,
+        gather_dtensor: bool,
+        prefix: str,
+        size_per_shard: int,
+        use_async: bool,
     ):
         """
         Save optimizer to sharded checkpoint.
@@ -340,7 +349,7 @@ class CheckpointIO(ABC):
         """
 
     @abstractmethod
-    def save_unsharded_optimizer(self, optimizer: Optimizer, checkpoint: Path, gather_dtensor: bool):
+    def save_unsharded_optimizer(self, optimizer: Optimizer, checkpoint: Path, gather_dtensor: bool, use_async: bool):
         """
         Save optimizer to unsharded checkpoint.
 

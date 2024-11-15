@@ -44,6 +44,7 @@ def check_state_dict_equal(
     ignore_device: bool = True,
     ignore_dtype: bool = False,
 ):
+    print("check_state_dict_equal")
     assert len(list(d1.keys())) == len(
         list(d2.keys())
     ), f"Number of keys unequal: {len(list(d1.keys()))} vs {len(list(d2.keys()))}"
